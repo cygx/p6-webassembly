@@ -465,6 +465,10 @@ class Module {
         $module;
     }
 
+    method type($id) {
+        $!type_section.?entries[$id]
+    }
+
     method add(Section $_) {
         when TypeSection { $!type_section = $_ }
         when ImportSection { $!import_section = $_ }
