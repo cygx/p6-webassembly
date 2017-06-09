@@ -1,4 +1,4 @@
-unit module WebAssembly;
+unit package WebAssembly;
 
 enum Type (
     :i32(0x7f),
@@ -72,6 +72,13 @@ class GlobalVariable {
 
 class InitExpr {}
 
+class DataSegment {
+    has $.index;
+    has $.offset;
+    has $.size;
+    has $.data;
+}
+
 class Section {
     has $.id;
     has $.payload_len;
@@ -108,6 +115,15 @@ class ExportSection is Section::Common {}
 class StartSection is Section {
     has $.index;
 }
+
+class ElementSection is Section {}
+
+class CodeSection is Section {
+    has $.count;
+    has @.bodies;
+}
+
+class DataSection is Section::Common {}
 
 class BlobStream { ... }
 
@@ -275,7 +291,8 @@ class Stream {
     }
 
     multi method parse(:$init_expr!) {
-        die 'TODO'
+        while self.getbyte != 0x0b {}
+        42;
     }
 
     multi method parse(:$global_variable!) {
@@ -292,6 +309,22 @@ class Stream {
         and defined my $kind = self.parse(:external_kind)
         and defined my $index = self.parse(:varuint, 32)
         and ExportEntry.new(:$field, :$kind, :$index)
+        or Nil;
+    }
+
+    multi method parse(:$function_body!) {
+        defined my $body_size = self.parse(:varuint, 32)
+        and defined self.read($body_size)
+        and 42
+        or Nil;
+    }
+
+    multi method parse(:$data_segment!) {
+        defined my $index = self.parse(:varuint, 32)
+        and defined my $offset = self.parse(:init_expr)
+        and defined my $size = self.parse(:varuint, 32)
+        and defined my $data = self.read($size)
+        and DataSegment.new(:$index, :$offset, :$size, :$data)
         or Nil;
     }
 
@@ -377,10 +410,20 @@ class Stream {
             when 9 { die 'TODO' }
 
             # code section
-            when 10 { die 'TODO' }
+            when 10 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @bodies = (self.parse(:function_body) // return Nil) xx $count
+                and CodeSection.new(:$id, :$payload_len, :$count, :@bodies)
+                or Nil;
+            }
 
             # data section
-            when 11 { die 'TODO' }
+            when 11 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:data_segment) // return Nil) xx $count
+                and DataSection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
 
             default { die "illegal section $_" }
         }
@@ -397,4 +440,45 @@ class BlobStream is Stream {
     }
     method getbyte { $!blob[$!pos++] }
     method getpos { $!pos }
+}
+
+class Module {
+    has $.type_section;
+    has $.import_section;
+    has $.function_section;
+    has $.table_section;
+    has $.memory_section;
+    has $.global_section;
+    has $.export_section;
+    has $.start_section;
+    has $.element_section;
+    has $.code_section;
+    has $.data_section;
+    has @.custom_sections;
+
+    multi method load(IO::Path $path) {
+        self.load(Stream.new($path.slurp(:bin)));
+    }
+    multi method load(Stream $stream) {
+        my $module = self.bless;
+        $module.add($_) for $stream.sections;
+        $module;
+    }
+
+    method add(Section $_) {
+        when TypeSection { $!type_section = $_ }
+        when ImportSection { $!import_section = $_ }
+        when FunctionSection { $!function_section = $_ }
+        when TableSection { $!table_section = $_ }
+        when MemorySection { $!memory_section = $_ }
+        when GlobalSection { $!global_section = $_ }
+        when ExportSection { $!export_section = $_ }
+        when StartSection { $!start_section = $_ }
+        when ElementSection { $!element_section = $_ }
+        when CodeSection { $!code_section = $_ }
+        when DataSection { $!data_section = $_ }
+        default { warn "unsuppoted section {.^name}" }
+    }
+
+    method assemble { !!! }
 }

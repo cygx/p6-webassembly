@@ -1,5 +1,7 @@
 use lib '.';
 use WebAssembly;
+use WebAssembly::Compiler;
 
-my $blob := slurp 'hello.wasm', :bin;
-.say for WebAssembly::Stream.new($blob).sections;
+my $module := WebAssembly::Module.load('hello.wasm'.IO);
+say $module;
+say WebAssembly::Compiler.decompile($module);
