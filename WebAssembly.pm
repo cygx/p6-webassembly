@@ -10,12 +10,17 @@ enum Type (
     :emptyblock(0x40),
 );
 
-sub pairup($_) { (my uint $ = $_) => $_ }
+enum ExternalKind(
+    :Function(0),
+    :Table(1),
+    :Memory(2),
+    :Global(3),
+);
 
-BEGIN my %ALL{Int} is default(Nil) = Type::.values.map(&pairup);
-BEGIN my %VALUES{Int} is default(Nil) = (i32, i64, f32, f64).map(&pairup);
+BEGIN my %VALUES{Int} is default(Nil) = (i32, i64, f32, f64).map: {
+    (my uint $ = $_) => $_;
+}
 
-multi gettype($byte) { %ALL{$byte} }
 multi gettype($byte, :$value_type!) { %VALUES{$byte} }
 multi gettype($byte, :$func_type!) { $byte == func ?? func !! Nil }
 multi gettype($byte, :$elem_type!) { $byte == anyfunc ?? anyfunc !! Nil }
@@ -47,15 +52,61 @@ class ResizableLimits {
     has $.maximum;
 }
 
+class ImportEntry {
+    has $.module;
+    has $.field;
+    has $.kind;
+    has $.type;
+}
+
+class ExportEntry {
+    has $.field;
+    has $.kind;
+    has $.index;
+}
+
+class GlobalVariable {
+    has $.type;
+    has $.init;
+}
+
+class InitExpr {}
+
 class Section {
     has $.id;
     has $.payload_len;
 }
 
+class Section::Common is Section {
+    has $.count;
+    has @.entries;
+}
+
 class CustomSection is Section {
-    has $.name_len;
     has $.name;
     has $.payload_data;
+}
+
+class TypeSection is Section::Common {}
+class ImportSection is Section::Common {}
+
+class FunctionSection is Section {
+    has $.count;
+    has @.types;
+}
+
+class TableSection is Section::Common {}
+class MemorySection is Section::Common {}
+
+class GlobalSection is Section {
+    has $.count;
+    has @.globals;
+}
+
+class ExportSection is Section::Common {}
+
+class StartSection is Section {
+    has $.index;
 }
 
 class BlobStream { ... }
@@ -66,6 +117,16 @@ class Stream {
     method get($) { !!! }
     method getbyte { !!! }
     method getpos { !!! }
+    method hasmore { !!! }
+
+    proto method new(|) {*}
+    multi method new(blob8 $blob) { BlobStream.bless(:$blob) }
+
+    method sections {
+        self.parse(:magic_number) // fail "invalid magic number";
+        self.parse(:version) // fail "unsupported version";
+        gather loop { take self.parse(:section) // last }
+    }
 
     method mark {
         $!mark = self.getpos;
@@ -75,9 +136,6 @@ class Stream {
     method offset {
         self.getpos - $!mark;
     }
-
-    proto method new(|) {*}
-    multi method new(blob8 $blob) { BlobStream.bless(:$blob) }
 
     proto method read(|) {*}
 
@@ -133,7 +191,7 @@ class Stream {
             !! $value;
     }
 
-    proto method parse(|) {*}
+    proto method parse(|) { self.hasmore ?? {*} !! Nil }
 
     multi method parse($bits, :$varuint!) {
         $_ < (1 +< $bits) ?? $_ !! Nil
@@ -157,59 +215,174 @@ class Stream {
     }
 
     multi method parse(:$func_type!) {
-        gettype(self.getbyte, :func_type)
-        andthen my $param_count = self.parse(:varuint, 32)
-        andthen my @param_types = (self.parse(:value_type) //
-                                    return Nil) xx $param_count
-        andthen my $return_count = self.parse(:varuint, 1)
-        andthen $return_count && my $return_type = self.parse(:value_type)
-        andthen FuncType.new(:$param_count, :@param_types, :$return_count, :$return_type)
-        orelse Nil;
+        defined gettype(self.getbyte, :func_type)
+        and defined my $param_count = self.parse(:varuint, 32)
+        and defined my @param_types = (self.parse(:value_type) // return Nil) xx $param_count
+        and defined my $return_count = self.parse(:varuint, 1)
+        and defined $return_count && (my $return_type = self.parse(:value_type))
+        and FuncType.new(:$param_count, :@param_types, :$return_count, :$return_type)
+        or Nil;
     }
 
     multi method parse(:$global_type!) {
-        my $content_type = gettype(self.getbyte, :value_type)
-        andthen my $mutability = self.parse(:varuint, 1)
-        andthen GlobalType.new(:$content_type, :$mutability)
-        orelse Nil;
+        defined my $content_type = gettype(self.getbyte, :value_type)
+        and defined my $mutability = self.parse(:varuint, 1)
+        and GlobalType.new(:$content_type, :$mutability)
+        or Nil;
     }
 
     multi method parse(:$table_type!) {
-        my $element_type = self.parse(:elem_type)
-        andthen my $limits = self.parse(:resizable_limits)
-        andthen TableType.new(:$element_type, :$limits)
-        orelse Nil;
+        defined my $element_type = self.parse(:elem_type)
+        and defined my $limits = self.parse(:resizable_limits)
+        and TableType.new(:$element_type, :$limits)
+        or Nil;
     }
 
     multi method parse(:$memory_type!) {
-        my $limits = self.parse(:resizable_limits)
-        andthen MemoryType.new(:$limits)
-        orelse Nil;
+        defined my $limits = self.parse(:resizable_limits)
+        and MemoryType.new(:$limits)
+        or Nil;
     }
 
     multi method parse(:$resizable_limits!) {
-        my $flags = self.parse(:varuint, 1)
-        andthen my $initial = self.parse(:varuint, 32)
-        andthen $flags && my $maximum = self.parse(:varuint, 32)
-        andthen ResizableLimits.new(:$flags, :$initial, :$maximum)
-        orelse Nil;
+        defined my $flags = self.parse(:varuint, 1)
+        and defined my $initial = self.parse(:varuint, 32)
+        and defined $flags && (my $maximum = self.parse(:varuint, 32))
+        and ResizableLimits.new(:$flags, :$initial, :$maximum)
+        or Nil;
+    }
+
+    multi method parse(:$external_kind!) {
+        ExternalKind(self.read(:uint8)) // Nil;
+    }
+
+    multi method parse(:$import_entry!) {
+        defined my $module_len = self.parse(:varuint, 32)
+        and defined my $module_blob = self.read($module_len)
+        and defined my $module = (try $module_blob.decode)
+        and defined my $field_len = self.parse(:varuint, 32)
+        and defined my $field_blob = self.read($field_len)
+        and defined my $field = (try $field_blob.decode)
+        and defined my $kind = self.parse(:external_kind)
+        and defined my $type = (given $kind {
+            when Function { self.parse(:varuint, 32) }
+            when Table { self.parse(:table_type) }
+            when Memory { self.parse(:memory_type) }
+            when Global { self.parse(:global_type) }
+        })
+        and ImportEntry.new(:$module, :$field, :$kind, :$type)
+        or Nil;
+    }
+
+    multi method parse(:$init_expr!) {
+        die 'TODO'
+    }
+
+    multi method parse(:$global_variable!) {
+        defined my $type = self.parse(:global_type)
+        and defined my $init = self.parse(:init_expr)
+        and GlobalVariable.new(:$type, :$init)
+        or Nil;
+    }
+
+    multi method parse(:$export_entry!) {
+        defined my $field_len = self.parse(:varuint, 32)
+        and defined my $field_blob = self.read($field_len)
+        and defined my $field = (try $field_blob.decode)
+        and defined my $kind = self.parse(:external_kind)
+        and defined my $index = self.parse(:varuint, 32)
+        and ExportEntry.new(:$field, :$kind, :$index)
+        or Nil;
     }
 
     multi method parse(:$section!) {
-        my $id = self.parse(:varuint, 7)
-        andthen my $payload_len = self.parse(:varuint, 32)
-        andthen do given $id {
+        defined my $id = self.parse(:varuint, 7)
+        and defined my $payload_len = self.parse(:varuint, 32)
+        and do given $id {
             # custom section
             when 0 {
                 self.mark;
-                my $name_len = self.parse(:varuint, 32)
-                andthen my $name = ((try .decode) given self.read($name_len))
-                andthen my $payload_data = self.read($payload_len - self.offset)
-                andthen CustomSection.new(:$id, :$name_len, :$name, :$payload_data)
-                orelse Nil;
+                defined my $name_len = self.parse(:varuint, 32)
+                and defined my $name_blob = self.read($name_len)
+                and defined my $name = (try $name_blob.decode)
+                and defined my $payload_data = self.read($payload_len - self.offset)
+                and CustomSection.new(:$id, :$payload_len, :$name, :$payload_data)
+                or Nil;
             }
 
-            default { Nil }
+            # type section
+            when 1 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:func_type) // return Nil) xx $count
+                and TypeSection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
+
+            # import section
+            when 2 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:import_entry) // return Nil) xx $count
+                and ImportSection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
+
+            # function section
+            when 3 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @types = (self.parse(:varuint, 32) // return Nil) xx $count
+                and FunctionSection.new(:$id, :$payload_len, :$count, :@types)
+                or Nil;
+            }
+
+            # table section
+            when 4 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:table_type) // return Nil) xx $count
+                and TableSection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
+
+            # memory section
+            when 5 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:memory_type) // return Nil) xx $count
+                and MemorySection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
+
+            # global section
+            when 6 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @globals = (self.parse(:global_variable) // return Nil) xx $count
+                and GlobalSection.new(:$id, :$payload_len, :$count, :@globals)
+                or Nil;
+            }
+
+            # export section
+            when 7 {
+                defined my $count = self.parse(:varuint, 32)
+                and defined my @entries = (self.parse(:export_entry) // return Nil) xx $count
+                and ExportSection.new(:$id, :$payload_len, :$count, :@entries)
+                or Nil;
+            }
+
+            # start section
+            when 8 {
+                defined my $index = self.parse(:varuint, 32)
+                and StartSection.new(:$index)
+                or Nil;
+            }
+
+            # element section
+            when 9 { die 'TODO' }
+
+            # code section
+            when 10 { die 'TODO' }
+
+            # data section
+            when 11 { die 'TODO' }
+
+            default { die "illegal section $_" }
         }
     }
 }
@@ -217,6 +390,7 @@ class Stream {
 class BlobStream is Stream {
     has blob8 $.blob;
     has uint $.pos;
+    method hasmore { $!pos < $!blob.elems }
     method get($n) {
         LEAVE $!pos += $n;
         $!blob.subbuf($!pos, $n);
