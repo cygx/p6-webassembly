@@ -74,4 +74,8 @@ my class siol is export {
     multi method decompile($source) {
         self.decompile(Module.load($source));
     }
+
+    method compile(Str $code) {
+        42
+    }
 }

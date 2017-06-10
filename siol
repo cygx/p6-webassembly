@@ -1,0 +1,11 @@
+#!/usr/bin/env perl6
+use lib '.';
+use WebAssembly::Siol;
+
+multi MAIN(Str $in, Str $out = '-', Bool :decompile(:$d)!) {
+    spurt $out, siol.decompile($in.IO);
+}
+
+multi MAIN(Str $in, Str $out = $in.subst(/'.siol'?$/, '.wasm'), Bool :compile(:$c)!) {
+    spurt $out, siol.compile(slurp $in);
+}
