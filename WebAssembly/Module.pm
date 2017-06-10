@@ -16,8 +16,13 @@ class Module is export {
     has $.data_section;
     has @.custom_sections;
 
+    proto method load($) {*}
+
     multi method load(IO::Path $path) {
         self.load(Stream.new($path.slurp(:bin)));
+    }
+    multi method load(blob8 $blob) {
+        self.load(Stream.new($blob));
     }
     multi method load(Stream $stream) {
         my $module = self.bless;

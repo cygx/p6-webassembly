@@ -1,7 +1,4 @@
 use lib '.';
-use WebAssembly;
-use WebAssembly::Compiler;
+use WebAssembly::Siol;
 
-my $module := WebAssembly::Module.load('hello.wasm'.IO);
-say $module;
-say WebAssembly::Compiler.decompile($module);
+say siol.decompile('hello.wasm'.IO);

@@ -49,7 +49,9 @@ multi decompile(GlobalSection $_) {
     take '';
 }
 
-class Compiler {
+my class siol is export {
+    proto method decompile($) {*}
+
     multi method decompile(Module $_) {
         my $*module = $_;
         join "\n", gather {
@@ -57,5 +59,9 @@ class Compiler {
             decompile($_) with .export_section;
             decompile($_) with .global_section;
         }
+    }
+
+    multi method decompile($source) {
+        self.decompile(Module.load($source));
     }
 }
