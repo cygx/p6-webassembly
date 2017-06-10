@@ -1,29 +1,29 @@
-use WebAssembly;
-
 unit package WebAssembly;
+use WebAssembly::Sections;
+use WebAssembly::Module;
 
 multi decompile(Str $code) { $code }
 
-multi decompile(WebAssembly::FuncType $_) {
+multi decompile(FuncType $_) {
     [~] '(', .param_types.join(', ') , ')',
         .return_count ?? " -> {.return_type}" !! '';
 }
 
-multi decompile(WebAssembly::GlobalType $_) {
+multi decompile(GlobalType $_) {
     "{.content_type}"
 }
 
-multi decompile(WebAssembly::MemoryType $_) {
+multi decompile(MemoryType $_) {
     "memory({ decompile .limits })";
 }
 
-multi decompile(WebAssembly::ResizableLimits $_) {
+multi decompile(ResizableLimits $_) {
     .flags ?? "{.initial}..{.maximum}" !! "{.initial}";
 }
 
-multi decompile(WebAssembly::ImportSection $_) {
+multi decompile(ImportSection $_) {
     for .entries {
-        my $type = decompile .kind == WebAssembly::Function
+        my $type = decompile .kind == Function
             ?? $*module.type(.type)
             !! .type;
 
@@ -33,7 +33,7 @@ multi decompile(WebAssembly::ImportSection $_) {
     take '';
 }
 
-multi decompile(WebAssembly::ExportSection $_) {
+multi decompile(ExportSection $_) {
     for .entries {
         take "export {.field}";
     }
@@ -41,12 +41,21 @@ multi decompile(WebAssembly::ExportSection $_) {
     take '';
 }
 
+multi decompile(GlobalSection $_) {
+    for .entries.kv -> $id, $_ {
+        take "global \@{$id} : {.type}";
+    }
+
+    take '';
+}
+
 class Compiler {
-    multi method decompile(WebAssembly::Module $_) {
+    multi method decompile(Module $_) {
         my $*module = $_;
         join "\n", gather {
             decompile($_) with .import_section;
             decompile($_) with .export_section;
+            decompile($_) with .global_section;
         }
     }
 }
