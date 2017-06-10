@@ -80,6 +80,19 @@ my class DataSegment is export {
     has $.data;
 }
 
+my class LocalEntry is export {
+    has $.count;
+    has $.type;
+}
+
+my class FunctionBody is export {
+    has $.body_size;
+    has @.locals;
+    has $.code;
+    has $.index;
+    method local_count { @!locals.elems }
+}
+
 my class Section is export {
     has $.id;
     has $.payload_len;

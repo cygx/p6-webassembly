@@ -49,6 +49,15 @@ multi decompile(GlobalSection $_) {
     take '';
 }
 
+multi decompile(CodeSection $_) {
+    for .entries.kv -> $pos, $_ {
+        my $index = .index;
+        my $type = $*module.signature($pos);
+        my $name = $*module.exportname(:func, $index);
+        take "fn {$name // "\$$index"}{decompile $type} \{}\n"
+    }
+}
+
 my class siol is export {
     proto method decompile($) {*}
 
@@ -58,6 +67,7 @@ my class siol is export {
             decompile($_) with .import_section;
             decompile($_) with .export_section;
             decompile($_) with .global_section;
+            decompile($_) with .code_section;
         }
     }
 

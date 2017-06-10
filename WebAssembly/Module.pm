@@ -30,8 +30,21 @@ class Module is export {
         $module;
     }
 
-    method type($id) {
+    method type(Int $id) {
         $!type_section.?entries[$id]
+    }
+
+    method signature(Int $id) {
+        $!function_section.?entries[$id]
+        andthen $!type_section.?entries[$_];
+    }
+
+    proto exportname($) {*}
+
+    multi method exportname(Int $id, :$func!) {
+        $!export_section.?entries.first({
+            .kind === Function && .index === $id;
+        }).field;
     }
 
     method add(Section $_) {

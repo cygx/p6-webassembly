@@ -5,6 +5,7 @@ my class BlobStream { ... }
 
 class Stream is export {
     has uint $!mark;
+    has uint $!func_index;
 
     method get($) { !!! }
     method getbyte { !!! }
@@ -149,6 +150,7 @@ class Stream is export {
     }
 
     multi method parse(:$import_entry!) {
+        my $index;
         defined my $module_len = self.parse(:varuint, 32)
         and defined my $module_blob = self.read($module_len)
         and defined my $module = (try $module_blob.decode)
@@ -157,12 +159,15 @@ class Stream is export {
         and defined my $field = (try $field_blob.decode)
         and defined my $kind = self.parse(:external_kind)
         and defined my $type = (given $kind {
-            when Function { self.parse(:varuint, 32) }
+            when Function {
+                $index = $!func_index++;
+                self.parse(:varuint, 32);
+            }
             when Table { self.parse(:table_type) }
             when Memory { self.parse(:memory_type) }
             when Global { self.parse(:global_type) }
         })
-        and ImportEntry.new(:$module, :$field, :$kind, :$type)
+        and ImportEntry.new(:$module, :$field, :$kind, :$type, :$index)
         or Nil;
     }
 
@@ -189,11 +194,22 @@ class Stream is export {
         or Nil;
     }
 
+    multi method parse(:$local_entry!) {
+        defined my $count = self.parse(:varuint, 32)
+        and defined my $type = self.parse(:value_type)
+        and LocalEntry.new(:$count, :$type)
+        or Nil;
+    }
+
     multi method parse(:$function_body!) {
-        # todo
+        my $index = $!func_index++;
         defined my $body_size = self.parse(:varuint, 32)
-        and defined self.read($body_size)
-        and 42
+        and self.mark
+        and defined my $local_count = self.parse(:varuint, 32)
+        and defined my @locals = (self.parse(:local_entry)// return Nil) xx $local_count
+        and defined my $code = self.read($body_size - self.offset)
+        and $code[*-1] == 0x0b
+        and FunctionBody.new(:$body_size, :@locals, :$code, :$index)
         or Nil;
     }
 
