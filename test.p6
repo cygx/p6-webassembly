@@ -1,4 +1,6 @@
 use lib '.';
-use WebAssembly::Siol;
+use WebAssembly;
+use WebAssembly::Opcodes;
 
-print siol.decompile('hello.wasm'.IO);
+my $module = WebAssembly::Module.load('hello.wasm'.IO);
+say ($module.code_section andthen .entries[*-1].code);

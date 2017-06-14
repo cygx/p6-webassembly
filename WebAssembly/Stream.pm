@@ -1,4 +1,5 @@
 unit package WebAssembly;
+use WebAssembly::Opcodes;
 use WebAssembly::Sections;
 
 my class BlobStream { ... }
@@ -206,9 +207,9 @@ class Stream is export {
         defined my $body_size = self.parse(:varuint, 32)
         and self.mark
         and defined my $local_count = self.parse(:varuint, 32)
-        and defined my @locals = (self.parse(:local_entry)// return Nil) xx $local_count
-        and defined my $code = self.read($body_size - self.offset)
-        and $code[*-1] == 0x0b
+        and defined my @locals = (self.parse(:local_entry) // return Nil) xx $local_count
+        and defined my $code = self.parse(:bytecode, $body_size - self.offset) // return Nil
+        and $code[*-1] == op::end
         and FunctionBody.new(:$body_size, :@locals, :$code, :$index)
         or Nil;
     }
@@ -220,6 +221,26 @@ class Stream is export {
         and defined my $data = self.read($size)
         and DataSegment.new(:$index, :$offset, :$size, :$data)
         or Nil;
+    }
+
+    multi method parse($size, :$bytecode!) {
+        my @code;
+        self.mark;
+        loop {
+            return Nil if self.offset >= $size;
+
+            my $byte = self.getbyte;
+            my $op = op($byte);
+            if !$op.defined {
+                warn "unknown opcode $byte";
+                return Nil;
+            }
+
+            # TODO @code.append();
+
+            last if $op == op::end;
+        }
+        @code;
     }
 
     multi method parse(:$section!) {
