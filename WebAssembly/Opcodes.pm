@@ -180,6 +180,14 @@ package WebAssembly {
     );
 
     nop.__immediate__ = :none;
+    end.__immediate__ = :none;
+    return.__immediate__ = :none;
+    call.__immediate__ = :varuint32;
+    get_local.__immediate__ = :varuint32;
+    set_local.__immediate__ = :varuint32;
+    get_global.__immediate__ = :varuint32;
+    i32-load.__immediate__ = :memory_immediate;
+    i32-const.__immediate__ = :varuint32;
 }
 
 sub EXPORT { BEGIN Map.new((op => WebAssembly::Opcode)) }

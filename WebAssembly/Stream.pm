@@ -92,6 +92,10 @@ class Stream is export {
             given self.read(:varuint);
     }
 
+    multi method parse(:$varuint32!) {
+        self.parse(:varuint, 32)
+    }
+
     multi method parse(:$magic_number!) {
         self.read(:uint32) == 0x6d736100 ?? 0x6d736100 !! Nil;
     }
@@ -110,7 +114,7 @@ class Stream is export {
 
     multi method parse(:$func_type!) {
         defined gettype(self.getbyte, :func_type)
-        and defined my $param_count = self.parse(:varuint, 32)
+        and defined my $param_count = self.parse(:varuint32)
         and defined my @param_types = (self.parse(:value_type) // return Nil) xx $param_count
         and defined my $return_count = self.parse(:varuint, 1)
         and defined $return_count && (my $return_type = self.parse(:value_type))
@@ -140,8 +144,8 @@ class Stream is export {
 
     multi method parse(:$resizable_limits!) {
         defined my $flags = self.parse(:varuint, 1)
-        and defined my $initial = self.parse(:varuint, 32)
-        and defined $flags && (my $maximum = self.parse(:varuint, 32))
+        and defined my $initial = self.parse(:varuint32)
+        and defined $flags && (my $maximum = self.parse(:varuint32))
         and ResizableLimits.new(:$flags, :$initial, :$maximum)
         or Nil;
     }
@@ -152,17 +156,17 @@ class Stream is export {
 
     multi method parse(:$import_entry!) {
         my $index;
-        defined my $module_len = self.parse(:varuint, 32)
+        defined my $module_len = self.parse(:varuint32)
         and defined my $module_blob = self.read($module_len)
         and defined my $module = (try $module_blob.decode)
-        and defined my $field_len = self.parse(:varuint, 32)
+        and defined my $field_len = self.parse(:varuint32)
         and defined my $field_blob = self.read($field_len)
         and defined my $field = (try $field_blob.decode)
         and defined my $kind = self.parse(:external_kind)
         and defined my $type = (given $kind {
             when Function {
                 $index = $!func_index++;
-                self.parse(:varuint, 32);
+                self.parse(:varuint32);
             }
             when Table { self.parse(:table_type) }
             when Memory { self.parse(:memory_type) }
@@ -186,17 +190,17 @@ class Stream is export {
     }
 
     multi method parse(:$export_entry!) {
-        defined my $field_len = self.parse(:varuint, 32)
+        defined my $field_len = self.parse(:varuint32)
         and defined my $field_blob = self.read($field_len)
         and defined my $field = (try $field_blob.decode)
         and defined my $kind = self.parse(:external_kind)
-        and defined my $index = self.parse(:varuint, 32)
+        and defined my $index = self.parse(:varuint32)
         and ExportEntry.new(:$field, :$kind, :$index)
         or Nil;
     }
 
     multi method parse(:$local_entry!) {
-        defined my $count = self.parse(:varuint, 32)
+        defined my $count = self.parse(:varuint32)
         and defined my $type = self.parse(:value_type)
         and LocalEntry.new(:$count, :$type)
         or Nil;
@@ -204,9 +208,9 @@ class Stream is export {
 
     multi method parse(:$function_body!) {
         my $index = $!func_index++;
-        defined my $body_size = self.parse(:varuint, 32)
+        defined my $body_size = self.parse(:varuint32)
         and self.mark
-        and defined my $local_count = self.parse(:varuint, 32)
+        and defined my $local_count = self.parse(:varuint32)
         and defined my @locals = (self.parse(:local_entry) // return Nil) xx $local_count
         and defined my $code = self.parse(:bytecode, $body_size - self.offset) // return Nil
         and $code[*-1] == op::end
@@ -215,11 +219,20 @@ class Stream is export {
     }
 
     multi method parse(:$data_segment!) {
-        defined my $index = self.parse(:varuint, 32)
+        defined my $index = self.parse(:varuint32)
         and defined my $offset = self.parse(:init_expr)
-        and defined my $size = self.parse(:varuint, 32)
+        and defined my $size = self.parse(:varuint32)
         and defined my $data = self.read($size)
         and DataSegment.new(:$index, :$offset, :$size, :$data)
+        or Nil;
+    }
+
+    multi method parse(:$none!) { Empty }
+
+    multi method parse(:$memory_immediate!) {
+        defined my $flags = self.parse(:varuint32)
+        and defined my $offset = self.parse(:varuint32)
+        and ($flags, $offset)
         or Nil;
     }
 
@@ -236,7 +249,9 @@ class Stream is export {
                 return Nil;
             }
 
-            # TODO @code.append();
+            my $immediate = $op.immediate;
+            die "op '$op' NYI" if $immediate === Any;
+            @code.append($op, |self.parse(|$immediate));
 
             last if $op == op::end;
         }
@@ -245,12 +260,12 @@ class Stream is export {
 
     multi method parse(:$section!) {
         defined my $id = self.parse(:varuint, 7)
-        and defined my $payload_len = self.parse(:varuint, 32)
+        and defined my $payload_len = self.parse(:varuint32)
         and do given $id {
             # custom section
             when 0 {
                 self.mark;
-                defined my $name_len = self.parse(:varuint, 32)
+                defined my $name_len = self.parse(:varuint32)
                 and defined my $name_blob = self.read($name_len)
                 and defined my $name = (try $name_blob.decode)
                 and defined my $payload_data = self.read($payload_len - self.offset)
@@ -260,7 +275,7 @@ class Stream is export {
 
             # type section
             when 1 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:func_type) // return Nil) xx $count
                 and TypeSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -268,7 +283,7 @@ class Stream is export {
 
             # import section
             when 2 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:import_entry) // return Nil) xx $count
                 and ImportSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -276,15 +291,15 @@ class Stream is export {
 
             # function section
             when 3 {
-                defined my $count = self.parse(:varuint, 32)
-                and defined my @entries = (self.parse(:varuint, 32) // return Nil) xx $count
+                defined my $count = self.parse(:varuint32)
+                and defined my @entries = (self.parse(:varuint32) // return Nil) xx $count
                 and FunctionSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
             }
 
             # table section
             when 4 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:table_type) // return Nil) xx $count
                 and TableSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -292,7 +307,7 @@ class Stream is export {
 
             # memory section
             when 5 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:memory_type) // return Nil) xx $count
                 and MemorySection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -300,7 +315,7 @@ class Stream is export {
 
             # global section
             when 6 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:global_variable) // return Nil) xx $count
                 and GlobalSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -308,7 +323,7 @@ class Stream is export {
 
             # export section
             when 7 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:export_entry) // return Nil) xx $count
                 and ExportSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -316,7 +331,7 @@ class Stream is export {
 
             # start section
             when 8 {
-                defined my $index = self.parse(:varuint, 32)
+                defined my $index = self.parse(:varuint32)
                 and StartSection.new(:$index)
                 or Nil;
             }
@@ -326,7 +341,7 @@ class Stream is export {
 
             # code section
             when 10 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:function_body) // return Nil) xx $count
                 and CodeSection.new(:$id, :$payload_len, :@entries)
                 or Nil;
@@ -334,7 +349,7 @@ class Stream is export {
 
             # data section
             when 11 {
-                defined my $count = self.parse(:varuint, 32)
+                defined my $count = self.parse(:varuint32)
                 and defined my @entries = (self.parse(:data_segment) // return Nil) xx $count
                 and DataSection.new(:$id, :$payload_len, :@entries)
                 or Nil;

@@ -47,6 +47,12 @@ class Module is export {
         }).field;
     }
 
+    multi method exportname(Int $id, :$global!) {
+        $!export_section.?entries.first({
+            .kind === Global && .index === $id;
+        }).field;
+    }
+
     method add(Section $_) {
         when TypeSection { $!type_section = $_ }
         when ImportSection { $!import_section = $_ }
